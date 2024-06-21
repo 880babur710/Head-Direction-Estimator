@@ -8,115 +8,159 @@ face_mesh = mp_face_mesh.FaceMesh(min_detection_confidence=0.5, min_tracking_con
 mp_drawing = mp.solutions.drawing_utils
 drawing_spec = mp_drawing.DrawingSpec(thickness=1, circle_radius=1)
 
-webcam = cv.VideoCapture(0)
-success, frame = webcam.read()
-while success:
-    frame = cv.cvtColor(cv.flip(frame, 1), cv.COLOR_BGR2RGB)
 
+def get_face_landmarks(frame):
+    """
+    Process the frame to get face landmarks.
+    :param frame: frame returned by using the `read()` method on a
+    VideoCapture object
+
+    :return: Returns the original frame passed in and results of the face
+    mesh that was processed on the same frame
+    """
+    frame_rgb = cv.cvtColor(cv.flip(frame, 1), cv.COLOR_BGR2RGB)
     # To improve performance
-    frame.flags.writeable = False
-
+    frame_rgb.flags.writeable = False
     # Get the result
-    results = face_mesh.process(frame)
-
+    results = face_mesh.process(frame_rgb)
     # To improve performance
-    frame.flags.writeable = True
-
+    frame_rgb.flags.writeable = True
     # Convert the colour space from RGB to BGR
-    frame = cv.cvtColor(frame, cv.COLOR_RGB2BGR)
+    frame_bgr = cv.cvtColor(frame_rgb, cv.COLOR_RGB2BGR)
 
-    frame_height, frame_width, frame_channels = frame.shape
+    return frame_bgr, results
+
+
+def get_facial_features(frame, face_landmarks):
+    """Extract 2D and 3D facial features."""
+    frame_height, frame_width, _ = frame.shape
     face_2d = []
     face_3d = []
+    nose_2d = None
+    nose_3d = None
 
-    if results.multi_face_landmarks:
-        for face_landmarks in results.multi_face_landmarks:
-            for index, landmark in enumerate(face_landmarks.landmark):
-                if index == 33 or index == 263 or index == 1 or index == 61 or index == 291 or index == 199:
-                    if index == 1:
-                        nose_2d = (landmark.x * frame_width, landmark.y * frame_height)
-                        nose_3d = (landmark.x * frame_width, landmark.y * frame_height, landmark.z * 3000)
+    landmark_indices = [33, 263, 1, 61, 291, 199]
 
-                    x, y = int(landmark.x * frame_width), int(landmark.y * frame_height)
+    for index in landmark_indices:
+        landmark = face_landmarks.landmark[index]
+        x, y = landmark.x * frame_width, landmark.y * frame_height
 
-                    # Get the 2d coordinates
-                    face_2d.append([x, y])
+        if index == 1:
+            nose_2d = (x, y)
+            nose_3d = (x, y, landmark.z * 3000)
 
-                    # Get the 3d coordinates
-                    face_3d.append([x, y, landmark.z])
+        # Get the 2d coordinates
+        face_2d.append([int(x), int(y)])
 
-            face_2d = np.array(face_2d, dtype=np.float64)
-            face_3d = np.array(face_3d, dtype=np.float64)
-            focal_length = 1 * frame_width
-            camera_matrix = np.array([[focal_length, 0, frame_height / 2],
-                                      [0, focal_length, frame_width / 2],
-                                      [0, 0, 1]])
+    face_2d_array = np.array(face_2d, dtype=np.float64)
+    face_3d_array = np.array([
+        (-165.0, 170.0, -135.0),   # Left eye outer corner
+        (165.0, 170.0, -135.0),    # Right eye outer corner
+        (0.0, 0.0, 0.0),           # Nose tip
+        (-150.0, -150.0, -125.0),  # Left mouth corner
+        (150.0, -150.0, -125.0),   # Right mouth corner
+        (0.0, -330.0, -65.0)       # Chin
+    ], dtype=np.float64)
 
-            # The distortion parameters
-            distortion_matrix = np.zeros((4, 1), dtype=np.float64)
-
-            # rot_vec is the rotation vector
-            # trans_vec is the translation vector
-            success, rot_vec, trans_vec = cv.solvePnP(face_3d, face_2d,
-                                                      camera_matrix,
-                                                      distortion_matrix)
-
-            # Get rotational matrix
-            rotation_matrix, jacobian_matrix = cv.Rodrigues(rot_vec)
-
-            # mtxR:  The matrix R, an upper triangular matrix representing
-            # the intrinsic camera parameters when decomposing a camera matrix
-            # mtxQ:  The matrix Q, an orthogonal matrix resulting from the
-            # decomposition, representing rotation or orientation in 3D space.
-            # Qx:  Rotation matrix around the x-axis
-            # Qy:  Rotation matrix around the y-axis
-            # Qz:  Rotation matrix around the z-axis
-            angles, mtxR, mtxQ, Qx, Qy, Qz = cv.RQDecomp3x3(rotation_matrix)
-
-            # Convert `angles` to the degree system
-            x = angles[0] * 360
-            y = angles[1] * 360
-            z = angles[2] * 360
-
-            # Find the direction at which the user's head is directed
-            if y > 10:
-                text = "Looking Right"
-            elif y < -10:
-                text = "Looking Left"
-            elif x > 10:
-                text = "Looking Up"
-            elif x < -10:
-                text = "Looking Down"
-            else:
-                text = "Looking Forward"
-
-            # Display the normal vector at the nose
-            nose_3d_projection, jacobian = cv.projectPoints(nose_3d, rot_vec,
-                                                            trans_vec,
-                                                            camera_matrix,
-                                                            distortion_matrix)
-            point1 = (int(nose_2d[0]), int(nose_2d[1]))
-            point2 = (int(nose_2d[0] + y * 10), int(nose_2d[1] - x * 10))
-
-            cv.line(frame, point1, point2, (255, 0, 0), 3)
-
-            # Adding text to the frame
-            cv.putText(frame, text, (20, 50), cv.FONT_HERSHEY_SIMPLEX, 2, (0, 255, 0), 2)
-            cv.putText(frame, f"x: {np.round(x, 2)}", (500, 100), cv.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
-            cv.putText(frame, f"y: {np.round(y, 2)}", (500, 150), cv.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
-            cv.putText(frame, f"z: {np.round(z, 2)}", (500, 200), cv.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
+    return face_2d_array, face_3d_array, nose_2d, nose_3d
 
 
-            mp_drawing.draw_landmarks(image=frame,
-                                      landmark_list=face_landmarks,
-                                      connections=mp_face_mesh.FACEMESH_CONTOURS,
-                                      landmark_drawing_spec=drawing_spec,
-                                      connection_drawing_spec=drawing_spec)
+def calculate_head_pose(face_2d, face_3d, frame):
+    """Calculate the head pose using solvePnP."""
+    frame_height, frame_width, _ = frame.shape
+    focal_length = 1 * frame_width
+    camera_matrix = np.array([[focal_length, 0, frame_height / 2],
+                              [0, focal_length, frame_width / 2],
+                              [0, 0, 1]])
+    distortion_matrix = np.zeros((4, 1), dtype=np.float64)
+    success, rot_vec, trans_vec = cv.solvePnP(face_3d, face_2d, camera_matrix,
+                                              distortion_matrix)
+    if not success:
+        return None, None, None
+
+    rotation_matrix, _ = cv.Rodrigues(rot_vec)
+    angles, mtxR, mtxQ, Qx, Qy, Qz = cv.RQDecomp3x3(rotation_matrix)
+    x, y, z = angles
+    if x > 0:
+        x = 180 - x
+    else:
+        x = -180 - x
+
+    return [x, y, z], rot_vec, trans_vec, camera_matrix, distortion_matrix
+
+
+def adjust_angles(current_angles, calibration_angles):
+    """
+    Adjust `current_angles` using `calibration_angles` so that all the
+    angles are 0 when the user is looking straight forward.
+    """
+    return np.subtract(current_angles, calibration_angles)
+
+
+def display_results(frame, angles, nose_2d, nose_3d, rot_vec, trans_vec, camera_matrix, distortion_matrix):
+    """Display the results on the frame."""
+    if angles[1] > 10:
+        text = "Looking Left"
+    elif angles[1] < -10:
+        text = "Looking Right"
+    elif angles[0] > 5:
+        text = "Looking Up"
+    elif angles[0] < -5:
+        text = "Looking Down"
+    else:
+        text = "Looking Forward"
+
+    nose_3d_projection, _ = cv.projectPoints(nose_3d, rot_vec, trans_vec,
+                                             camera_matrix, distortion_matrix)
+    point1 = (int(nose_2d[0]), int(nose_2d[1]))
+    point2 = (int(nose_2d[0] + angles[1] * 10), int(nose_2d[1] - angles[0] * 10))
+
+    cv.line(frame, point1, point2, (255, 0, 0), 3)
+    cv.putText(frame, text, (20, 50), cv.FONT_HERSHEY_SIMPLEX, 2, (0, 255, 0), 2)
+    if angles[0] > 0:
+        cv.putText(frame, f"Pitch: {np.round(angles[0], 2)}", (500, 100), cv.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
+    else:
+        cv.putText(frame, f"Pitch: {np.round(angles[0], 2)}", (500, 100), cv.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
+    cv.putText(frame, f"Yaw: {np.round(angles[1], 2)}", (500, 150), cv.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
+    cv.putText(frame, f"Roll: {np.round(angles[2], 2)}", (500, 200), cv.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
+
+
+def main():
+    webcam = cv.VideoCapture(0)
+    if not webcam.isOpened():
+        print("Error: Could not open webcam.")
+        return
+
+    try:
+        success, frame = webcam.read()
+        calibration_angles_obtained = False
+        calibration_angles = None
+        while success:
+            frame, results = get_face_landmarks(frame)
+            if results.multi_face_landmarks:
+                for face_landmarks in results.multi_face_landmarks:
+                    face_2d, face_3d, nose_2d, nose_3d = get_facial_features(frame, face_landmarks)
+                    angles, rot_vec, trans_vec, camera_matrix, distortion_matrix = calculate_head_pose(face_2d, face_3d, frame)
+
+                    # Obtain calibration angles
+                    if not calibration_angles_obtained and angles is not None:
+                        if cv.waitKey(1) & 0xFF == ord('c'):
+                            calibration_angles = angles
+
+                    if angles is not None and calibration_angles is not None:
+                        adjusted_angles = adjust_angles(angles, calibration_angles)
+                        display_results(frame, adjusted_angles, nose_2d, nose_3d, rot_vec, trans_vec, camera_matrix, distortion_matrix)
+                    mp_drawing.draw_landmarks(frame, face_landmarks, mp_face_mesh.FACEMESH_CONTOURS, drawing_spec, drawing_spec)
+
             cv.imshow('Webcam', frame)
-
             if cv.waitKey(5) & 0xFF == 27:
                 break
 
-    success, frame = webcam.read()
+            success, frame = webcam.read()
+    finally:
+        webcam.release()
+        cv.destroyAllWindows()
 
-webcam.release()
+
+if __name__ == "__main__":
+    main()
